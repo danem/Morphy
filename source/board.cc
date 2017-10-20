@@ -6,21 +6,68 @@
 
 #define BIT_MASK(idx) (static_cast<uint64_t>(1) << (idx))
 #define SET_BIT(v,idx) ((v) | BIT_MASK(idx))
-#define CLEAR_BIT(v,idx) ((v) ^ BIT_MASK(idx))
+#define CLEAR_BIT(v,idx) ((v) & ~BIT_MASK(idx))
 #define CHECK_BIT(v,idx) (((v) & BIT_MASK(idx)) == BIT_MASK(idx))
 #define INVERT_MASK(v) ((v) ^ 0xffffffffffffffff)
 #define LSB_FIRST(v) (__builtin_ffsll(v))
 #define MSB_FIRST(v) (__builtin_clzll(v))
-#define ROW_MAJOR(x,y) (y * 8 + x)
+#define ROW_MAJOR(x,y) ((y) * 8 + (x))
+#define FLIP_BB(bb) __builtin_bswap64(bb)
 
 using namespace morphy;
+
+struct MoveGenState {
+    std::vector<uint8_t> pinnedPieces;
+    uint64_t allPieces;
+    uint64_t enemyPieces;
+    bool canCastleKingSide;
+    bool canCastleQueenSide;
+
+    MoveGenState (const Board& board) :
+        allPieces(all_pieces(board)),
+        enemyPieces(enemy_pieces(board)),
+        canCastleKingSide(CHECK_BIT(board.current_castle_flags, CASTLE_KINGSIDE)),
+        canCastleQueenSide(CHECK_BIT(board.current_castle_flags, CASTLE_QUEENSIDE))
+    {}
+};
+
+bool MaskIterator::hasBits() const {
+    return mask != 0;
+}
+
+bool MaskIterator::nextBit(uint16_t * dest){
+    int idx = LSB_FIRST(mask);
+    if (idx == 0) return false;
+    mask = CLEAR_BIT(mask, idx-1);
+    *dest = static_cast<int16_t>(idx - 1);
+    return true;
+}
+
+int MaskIterator::bitCount() const {
+    return __builtin_clzll(mask);
+}
+
+bool MoveIterator::hasMoves() const {
+    return maskIter.hasBits();
+}
+
+int MoveIterator::moveCount() const {
+    return maskIter.bitCount();
+}
+
+bool MoveIterator::nextMove(Move* move){
+    if (!hasMoves()) return false;
+    move->type = type;
+    move->from = from;
+    maskIter.nextBit(&move->to);
+    return true;
+}
 
 enum Direction {
     NORTH, NORTHEAST, EAST, SOUTHEAST, SOUTH, SOUTHWEST, WEST, NORTHWEST
 };
 
 static const Vec2 dir_vectors[] = {{0,1}, {-1,1}, {-1,0}, {-1,-1}, {0,-1}, {1,-1}, {1,0}, {1,1}};
-static const std::array<PieceType,6> all_piece_types{{PieceType::PAWN, PieceType::ROOK, PieceType::BISHOP, PieceType::KNIGHT, PieceType::QUEEN, PieceType::KING}};
 
 static uint64_t rank_mask (uint8_t rank) {
     return static_cast<uint64_t>(0xff) << static_cast<uint64_t>(rank * 8);
@@ -126,7 +173,7 @@ static uint64_t knight_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
     if (idx - 18 >= 0) mask |= tl << (idx - 18);
     if (pos.x <= 1) mask &= three_guard;
     else if (pos.x >= 6) mask &= (three_guard << 5);
-    return (mask & enemy) | (mask & ~own);
+    return mask & ~own;
 }
 
 static uint64_t bishop_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
@@ -152,12 +199,21 @@ static uint64_t king_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
     return (mask & enemy) | (mask & ~own);
 }
 
+static uint64_t pawn_attack_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
+    uint64_t mask = (SET_BIT(0,ROW_MAJOR(pos.x-1,pos.y+1)) & enemy)
+                  | (SET_BIT(0,ROW_MAJOR(pos.x+1,pos.y+1)) & enemy);
+    if (pos.x == 7) mask &= three_guard << 5;
+    else if (pos.x == 0) mask &= three_guard;
+    return mask;
+
+}
+
 static uint64_t pawn_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
-    uint64_t mask = SET_BIT(0,ROW_MAJOR(pos.x,pos.y+2))
-                  | SET_BIT(0,ROW_MAJOR(pos.x,pos.y+3))
-                  | (SET_BIT(0,ROW_MAJOR(pos.x-1,pos.y+2)) & enemy)
-                  | (SET_BIT(0,ROW_MAJOR(pos.x+1,pos.y+2)) & enemy);
-    if (pos.x == 7) mask &= three_guard << 6;
+    uint64_t mask = SET_BIT(0,ROW_MAJOR(pos.x,pos.y+1))
+                  | SET_BIT(0,ROW_MAJOR(pos.x,pos.y+2))
+                  | (SET_BIT(0,ROW_MAJOR(pos.x-1,pos.y+1)) & enemy)
+                  | (SET_BIT(0,ROW_MAJOR(pos.x+1,pos.y+1)) & enemy);
+    if (pos.x == 7) mask &= three_guard << 5;
     else if (pos.x == 0) mask &= three_guard;
     return mask;
 }
@@ -172,6 +228,229 @@ static uint64_t castle_mask (uint64_t own, uint64_t enemy, uint8_t flags, const 
     return mask;
 }
 
+
+void morphy::initializeBoard (Board& board) {
+    board.rooks   = SET_BIT(0,ROW_MAJOR(0,0)) | SET_BIT(0,ROW_MAJOR(7,0)) | SET_BIT(0,ROW_MAJOR(0,7)) | SET_BIT(0,ROW_MAJOR(7,7));
+    board.knights = SET_BIT(0,ROW_MAJOR(1,0)) | SET_BIT(0,ROW_MAJOR(6,0)) | SET_BIT(0,ROW_MAJOR(1,7)) | SET_BIT(0,ROW_MAJOR(6,7));
+    board.bishops = SET_BIT(0,ROW_MAJOR(2,0)) | SET_BIT(0,ROW_MAJOR(5,0)) | SET_BIT(0,ROW_MAJOR(2,7)) | SET_BIT(0,ROW_MAJOR(5,7));
+    board.queens  = SET_BIT(0,ROW_MAJOR(3,0)) | SET_BIT(0,ROW_MAJOR(3,7));
+    board.kings   = SET_BIT(0,ROW_MAJOR(4,0)) | SET_BIT(0,ROW_MAJOR(4,7));
+    board.pawns   = 0xff00 | 0xff000000000000;
+    board.current_castle_flags = CASTLE_KINGSIDE | CASTLE_QUEENSIDE;
+    board.other_castle_flags = board.current_castle_flags;
+    board.current_double_moves = 0xff;
+    board.other_double_moves = 0xff;
+    board.current_bb = 0xffff;
+    board.is_white = true;
+}
+
+void morphy::flipBoard (Board& board) {
+    board.current_bb ^= all_pieces(board);
+    board.current_bb = FLIP_BB(board.current_bb);
+    board.bishops = FLIP_BB(board.bishops);
+    board.rooks   = FLIP_BB(board.rooks);
+    board.queens  = FLIP_BB(board.queens);
+    board.pawns   = FLIP_BB(board.pawns);
+    board.knights = FLIP_BB(board.knights);
+    board.kings   = FLIP_BB(board.kings);
+    board.is_white = !board.is_white;
+}
+
+void morphy::setPiece (Board& board, PieceType& type, const Vec2& pos) {
+    uint64_t* bb = getPieceBoard(board, type);
+    *bb = SET_BIT(*bb, pos);
+}
+
+void morphy::clearPiece (Board& board, PieceType& type, const Vec2& pos) {
+    uint64_t* bb = getPieceBoard(board, type);
+    *bb = CLEAR_BIT(*bb, pos);
+}
+
+uint64_t morphy::all_pieces (const Board& board) {
+    return board.rooks
+         | board.bishops
+         | board.knights
+         | board.queens
+         | board.kings
+         | board.pawns;
+}
+
+uint64_t morphy::enemy_pieces (const Board& board) {
+    return all_pieces(board) ^ board.current_bb;
+}
+
+
+const uint64_t* morphy::getPieceBoard (const Board& board, const PieceType& type) {
+    switch (type) {
+    case PieceType::ROOK:   return &board.rooks;
+    case PieceType::BISHOP: return &board.bishops;
+    case PieceType::KNIGHT: return &board.knights;
+    case PieceType::QUEEN:  return &board.queens;
+    case PieceType::KING:   return &board.kings;
+    case PieceType::PAWN:   return &board.pawns;
+    }
+}
+
+uint64_t* morphy::getPieceBoard (Board& board, const PieceType& type) {
+    const uint64_t* res = getPieceBoard(static_cast<const Board&>(board),type);
+    return const_cast<uint64_t*>(res);
+}
+
+uint64_t morphy::getPieceBoard (Board& board, uint64_t mask, const PieceType& type) {
+    return (*getPieceBoard(board,type)) & mask;
+}
+
+uint64_t morphy::getPieceBoard (const Board& board, uint64_t mask, const PieceType& type) {
+    return (*getPieceBoard(board,type)) & mask;
+}
+
+MoveIterator morphy::generateMoveMask (const Board& state, const Vec2& pos, const PieceType& type) {
+    uint64_t mask = 0;
+    uint64_t own = state.current_bb;
+    uint64_t enemy = enemy_pieces(state);
+
+    switch(type) {
+    case PieceType::ROOK:   mask = rook_mask(own,enemy,pos); break;
+    case PieceType::KNIGHT: mask = knight_mask(own,enemy,pos); break;
+    case PieceType::BISHOP: mask = bishop_mask(own,enemy,pos); break;
+    case PieceType::QUEEN:  mask = queen_mask(own,enemy,pos); break;
+    case PieceType::PAWN:   mask = pawn_mask(own,enemy,pos); break;
+    case PieceType::KING:{
+        mask = king_mask(own,enemy,pos);
+        if (state.current_castle_flags != 0) mask |= castle_mask(own,enemy,state.current_castle_flags,pos);
+        break;
+    }
+    }
+    return {type, static_cast<uint16_t>(pos.idx()), {mask}};
+}
+
+std::vector<MoveIterator> morphy::generateAllMoves (const Board& state) {
+    std::vector<MoveIterator> moves;
+    for (const PieceType& t : all_piece_types) {
+        MaskIterator mask{getPieceBoard(state,state.current_bb,t)};
+        uint16_t idx = 0;
+        while (mask.nextBit(&idx)) {
+            moves.emplace_back(generateMoveMask(state,Vec2{static_cast<int16_t>(idx)},t));
+        }
+    }
+    return moves;
+}
+
+static uint8_t isCastleMove (const Move& move) {
+    if (move.type != PieceType::KING) return NO_CASTLE;
+    else if (move.from == 3 && move.to == 1)  return CASTLE_KINGSIDE;
+    else if (move.from == 3 && move.to == 5) return CASTLE_QUEENSIDE;
+    else return NO_CASTLE;
+}
+
+bool morphy::validateMove (const Board& state, const Move& move) {
+    // Move input is psuedo valid already. We then need to
+    // validate against the rest of the ruleset.
+    uint64_t allPieces = all_pieces(state);
+
+    uint8_t castle = isCastleMove(move);
+    if (castle) {
+        if (!state.current_castle_flags) return false;
+        if (castle == CASTLE_KINGSIDE) {
+            if (allPieces & 6) return false; // path to rook isn't clear
+            if (threatsToCell(state,{2,0}).size()) return false;
+            if (threatsToCell(state,{1,0}).size()) return false;
+        }
+        else if (castle == CASTLE_QUEENSIDE) {
+            if (allPieces & 112) return false; // path to rook isn't clear
+            if (threatsToCell(state,{4,0}).size()) return false;
+            if (threatsToCell(state,{5,0}).size()) return false;
+            if (threatsToCell(state,{6,0}).size()) return false;
+        }
+    }
+
+    if (castle == CASTLE_KINGSIDE) {
+        if ((allPieces & 6) != 0) return false;
+    }
+
+    // To test for check, we apply the move and then use threatsToCell
+    Board temp = state;
+    applyMove(temp, move);
+    uint64_t kingMask = temp.kings & temp.current_bb;
+    Vec2 kingPos(LSB_FIRST(kingMask));
+    if (threatsToCell(temp,kingPos).size()) return false;
+
+    if (move.type == PieceType::PAWN) {
+
+
+    }
+}
+
+void morphy::applyMove (Board& state, const Move& move) {
+    state.current_bb = CLEAR_BIT(state.current_bb, move.from);
+    state.current_bb = SET_BIT(state.current_bb, move.to);
+    for (const PieceType& t : all_piece_types) {
+        if (t == move.type) continue;
+        uint64_t * bb = getPieceBoard(state, t);
+        *bb = CLEAR_BIT(*bb, move.to);
+    }
+    uint64_t * bb = getPieceBoard(state, move.type);
+    *bb = CLEAR_BIT(*bb, move.from);
+    *bb = SET_BIT(*bb, move.to);
+}
+
+// TODO: I bet we could speed this up by allowing the user to check multiple cells at once.
+std::vector<Move> morphy::threatsToCell (const Board& board, const Vec2& pos) {
+    std::vector<Move> res;
+    uint64_t enemy = enemy_pieces(board);
+    uint64_t own = board.current_bb;
+    uint64_t queenMask  = queen_mask(own,enemy,pos);
+    uint64_t knightMask = knight_mask(own,enemy,pos);
+    uint64_t pawnMask   = pawn_attack_mask(own,enemy,pos);
+    uint64_t kingMask   = king_mask(own,enemy, pos);
+    uint16_t posIdx     = pos.idx();
+
+    uint16_t idx = 0;
+    for (const PieceType& t : all_piece_types) {
+        if (t == PieceType::KING || t == PieceType::KNIGHT || t == PieceType::PAWN) continue;
+        uint64_t bb = getPieceBoard(board,enemy,t);
+        MaskIterator p{queenMask & bb};
+        while (p.nextBit(&idx)){
+            res.emplace_back(t,idx,posIdx);
+        }
+    }
+
+    MaskIterator pi{ pawnMask & getPieceBoard(board,enemy,PieceType::PAWN) };
+    while (pi.nextBit(&idx)) { res.emplace_back(PieceType::PAWN, idx); }
+
+    MaskIterator ni{ knightMask & getPieceBoard(board,enemy,PieceType::KNIGHT) };
+    while (ni.nextBit(&idx)) { res.emplace_back(PieceType::KNIGHT, idx); }
+
+    uint64_t km = kingMask & getPieceBoard(board,enemy, PieceType::KING);
+    if (km) {
+        res.emplace_back(PieceType::KING, km, posIdx);
+    }
+
+    return res;
+}
+
+int morphy::scoreBoard (const Board& state) {
+}
+
+Move bestMove (const Board& state, std::vector<MoveIterator>& moves) {
+    Move best;
+    Move currentMove;
+    int bestScore = std::numeric_limits<int>::min();
+    for (auto& mi : moves) {
+        while (mi.nextMove(&currentMove)) {
+            Board tmp = state;
+            applyMove(tmp, currentMove);
+            int score = -scoreBoard(tmp);
+            if (score > bestScore) {
+                bestScore = score;
+                best = currentMove;
+            }
+        }
+    }
+    return best;
+}
+
+
 static void testMask (const char * name, uint64_t target, uint64_t real) {
     bool passed = target == real;
     std::cout << name << ": " ;
@@ -180,6 +459,10 @@ static void testMask (const char * name, uint64_t target, uint64_t real) {
 }
 
 void morphy::testMasks () {
+    std::cout << "-------------------------\n";
+    std::cout << "START TESTS\n";
+    std::cout << "-------------------------\n";
+
     testMask("rank 0", 0xff, rank_mask(0));
     testMask("rank 7", 0xff00000000000000, rank_mask(7));
     testMask("file 0", 0x101010101010101, file_mask(0));
@@ -204,141 +487,64 @@ void morphy::testMasks () {
     testMask("knight 0,3", 0x20400040200, knight_mask(0,0,{0,3}));
     testMask("knight 7,3", 0x402000204000, knight_mask(0,0,{7,3}));
     testMask("pawn 0,1", 0x1030000, pawn_mask(0,0xffffffffffffffff,{0,1}));
-    testMask("pawn 7,1", 0x80c00000, pawn_mask(0,0,{7,1}));
+    testMask("pawn 7,1", 0x80c00000, pawn_mask(0,0xffffffffffffffff,{7,1}));
 
-    GameState gs;
-    initializeGameState(gs);
-    testMask("bishop move", 0, generateMoveMask(gs, {2,0}, PieceColor::WHITE, PieceType::BISHOP));
-    testMask("queen move", 0, generateMoveMask(gs, {4,0}, PieceColor::WHITE, PieceType::QUEEN));
-    testMask("king move", 0, generateMoveMask(gs, {3,0}, PieceColor::WHITE, PieceType::KING));
-    testMask("rook move", 0, generateMoveMask(gs, {0,0}, PieceColor::WHITE, PieceType::ROOK));
-    testMask("rook move 2", 0, generateMoveMask(gs, {7,0}, PieceColor::WHITE, PieceType::ROOK));
-    testMask("knight move", 0x50000, generateMoveMask(gs, {1,0}, PieceColor::WHITE, PieceType::KNIGHT));
-    testMask("knight move 2",0xa00000, generateMoveMask(gs, {6,0}, PieceColor::WHITE, PieceType::KNIGHT));
-    testMask("pawn move", 0x1010000, generateMoveMask(gs, {0,1}, PieceColor::WHITE, PieceType::PAWN));
-    testMask("pawn move", 0x80800000, generateMoveMask(gs, {7,1}, PieceColor::WHITE, PieceType::PAWN));
-    testMask("rook capture", 0x80808ff080000, generateMoveMask(gs,{3,3}, PieceColor::WHITE, PieceType::ROOK));
+    Board standardBoard;
+    initializeBoard(standardBoard);
 
-    std::vector<uint64_t> moves = generateAllMoves(gs, PieceColor::WHITE);
-    for (auto& v : moves){
-        std::cout << v << std::endl;
-    }
+    // Standard board with one black pawn on (7,6)
+    Board oneBlackPawn = standardBoard;
+    oneBlackPawn.pawns &= 0x8000000000ff00;
 
+    Board castleKingSide = standardBoard;
+    castleKingSide.knights = CLEAR_BIT(castleKingSide.knights,1);
+    castleKingSide.bishops = CLEAR_BIT(castleKingSide.bishops,2);
+    castleKingSide.current_bb &= ~static_cast<uint64_t>(6);
+
+    Board castleQueenSide = standardBoard;
+    castleQueenSide.queens  = CLEAR_BIT(castleQueenSide.queens,4);
+    castleQueenSide.bishops = CLEAR_BIT(castleQueenSide.bishops,5);
+    castleQueenSide.knights = CLEAR_BIT(castleQueenSide.knights,6);
+    castleQueenSide.current_bb &= ~static_cast<uint64_t>(112);
+
+    testMask("threats 1", 4, threatsToCell(oneBlackPawn,{3,6}).size());
+    testMask("threats 2", 1, threatsToCell(oneBlackPawn,{0,6}).size());
+    testMask("threats 3", 2, threatsToCell(oneBlackPawn,{6,5}).size());
+    testMask("threats 4", 1, threatsToCell(oneBlackPawn,{2,2}).size());
+
+
+    std::cout << "-------------------------\n";
+    std::cout << "END TESTS\n";
+    std::cout << "-------------------------\n";
 }
 
-
-void morphy::setPiece (Board& board, PieceType& type, const Vec2& pos) {
-    uint64_t* bb = getPieceBoard(board, type);
-    *bb = SET_BIT(*bb, pos);
-}
-
-void morphy::clearPiece (Board& board, PieceType& type, const Vec2& pos) {
-    uint64_t* bb = getPieceBoard(board, type);
-    *bb = CLEAR_BIT(*bb, pos);
-}
-
-void morphy::initializeBoard (Board& board, PieceColor color) {
-    board.rooks   = SET_BIT(0,ROW_MAJOR(0,0)) | SET_BIT(0,ROW_MAJOR(7,0));
-    board.knights = SET_BIT(0,ROW_MAJOR(1,0)) | SET_BIT(0,ROW_MAJOR(6,0));
-    board.bishops = SET_BIT(0,ROW_MAJOR(2,0)) | SET_BIT(0,ROW_MAJOR(5,0));
-    board.queens  = SET_BIT(0,ROW_MAJOR(3,0));
-    board.kings   = SET_BIT(0,ROW_MAJOR(4,0));
-    board.pawns   = 0xff << 8;
-    board.castle_flags = CASTLE_KINGSIDE | CASTLE_QUEENSIDE;
-    board.double_moves = 0xff;
-    board.color = color;
-    if (color == PieceColor::BLACK) {
-        board.rooks = flip_bb(board.rooks);
-        board.knights = flip_bb(board.knights);
-        board.bishops = flip_bb(board.bishops);
-        board.queens = flip_bb(board.queens);
-        board.kings = flip_bb(board.kings);
-        board.pawns = flip_bb(board.pawns);
+static void printBoard_internal (const Board& board, uint64_t mask, const char * tiles, char * output){
+    for (const auto& t : all_piece_types){
+        char tile = tiles[static_cast<uint8_t>(t)];
+        MaskIterator bb{getPieceBoard(board, mask, t)};
+        uint16_t idx = 0;
+        while (bb.nextBit(&idx)) {
+            output[63-idx] = tile;
+        }
     }
 }
 
-void morphy::initializeGameState (GameState& state) {
-    initializeBoard(state.whiteBoard, PieceColor::WHITE);
-    initializeBoard(state.blackBoard, PieceColor::BLACK);
-}
+void morphy::printBoard (const Board& gs) {
+    char output[64] = {};
+    std::array<const char *,2> pieces{{"prbnqk","PRBNQK"}};
+    // Always print from white's perspective
+    bool was_white = gs.is_white;
+    if (!was_white) flipBoard(const_cast<Board&>(gs));
 
+    printBoard_internal(gs, gs.current_bb, pieces[0], output);
+    printBoard_internal(gs, enemy_pieces(gs), pieces[1], output);
 
-uint64_t morphy::all_pieces (const Board& board) {
-    return board.rooks
-         | board.bishops
-         | board.knights
-         | board.queens
-         | board.kings
-         | board.pawns;
-}
+    if (!was_white) flipBoard(const_cast<Board&>(gs));
 
-uint64_t morphy::all_pieces (const GameState& state){
-    return all_pieces(state.whiteBoard)
-         | all_pieces(state.blackBoard);
-}
-
-uint64_t morphy::flip_bb(uint64_t x) {
-  return __builtin_bswap64(x);
-}
-
-uint64_t* morphy::getPieceBoard (Board& board, const PieceType& type) {
-    uint64_t* bb;
-    switch (type) {
-    case PieceType::ROOK:   bb = &board.rooks; break;
-    case PieceType::BISHOP: bb = &board.bishops; break;
-    case PieceType::KNIGHT: bb = &board.knights; break;
-    case PieceType::QUEEN:  bb = &board.queens; break;
-    case PieceType::KING:   bb = &board.kings; break;
-    case PieceType::PAWN:   bb = &board.pawns; break;
+    for (int i = 0; i < 64; i++) {
+        if (i%8==0 && i != 0) std::cout << "\n";
+        std::cout << output[i];
     }
-    return bb;
+    std::cout << "\n";
 }
-
-uint64_t morphy::generateMoveMask (GameState& state, const Vec2& pos, const PieceColor& color, const PieceType& type) {
-    uint64_t mask = 0;
-    uint64_t wboard = all_pieces(state.whiteBoard);
-    uint64_t bboard = all_pieces(state.blackBoard);
-    Board& ownB     = color == PieceColor::WHITE ? state.whiteBoard : state.blackBoard;
-    uint64_t own    = color == PieceColor::WHITE ? wboard : bboard;
-    uint64_t enemy  = color == PieceColor::WHITE ? bboard : wboard;
-
-    switch(type) {
-    case PieceType::ROOK:   mask = rook_mask(own,enemy,pos); break;
-    case PieceType::KNIGHT: mask = knight_mask(own,enemy,pos); break;
-    case PieceType::BISHOP: mask = bishop_mask(own,enemy,pos); break;
-    case PieceType::QUEEN:  mask = queen_mask(own,enemy,pos); break;
-    case PieceType::PAWN:{
-        mask = pawn_mask(own,enemy,pos);
-        if (color == PieceColor::BLACK) mask = flip_vertical(mask);
-        break;
-    }
-    case PieceType::KING:{
-        mask = king_mask(own,enemy,pos);
-        if (ownB.castle_flags != 0) mask |= castle_mask(own,enemy,ownB.castle_flags,pos);
-        break;
-    }
-    }
-    return mask;
-}
-
-void morphy::generateAllPieceMoves (std::vector<uint64_t>& masks, GameState& state, const PieceType& type, const PieceColor& color) {
-    Board& board = color == PieceColor::WHITE ? state.whiteBoard : state.blackBoard;
-    uint64_t bb = *getPieceBoard(board, type);
-    int idx = LSB_FIRST(bb);
-    while (idx != 0) {
-        Vec2 pos(idx-1);
-        masks.emplace_back(generateMoveMask(state, pos, color,type));
-        bb = CLEAR_BIT(bb,idx-1);
-        idx = LSB_FIRST(bb);
-    }
-}
-
-std::vector<uint64_t> morphy::generateAllMoves (GameState& state, const PieceColor& color) {
-    std::vector<uint64_t> masks;
-    for (const PieceType& t : all_piece_types) {
-        generateAllPieceMoves(masks, state, t, color);
-    }
-    return masks;
-}
-
 
