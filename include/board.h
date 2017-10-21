@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <vector>
 #include <array>
+#include <initializer_list>
 
 
 namespace morphy {
@@ -48,6 +49,12 @@ struct Move {
     PieceType type;
     uint16_t from;
     uint16_t to;
+
+    Move () {}
+
+    Move (PieceType type, uint16_t from, uint16_t to) :
+        type(type), from(from), to(to)
+    {}
 };
 
 struct MaskIterator {
@@ -86,28 +93,15 @@ struct Board {
     bool is_white;
 };
 
-/*
-namespace detail {
-
-    uint64_t diagonal_mask(uint8_t center);
-    uint64_t diagonal_mask(uint8_t center);
-    uint64_t flipDiagA1H8(uint64_t x);
-    uint64_t mirror_horizontal (uint64_t x);
-    uint64_t flip_vertical(uint64_t x);
-    uint64_t rect_mask (const Vec2& center, const Vec2& size);
-    //uint64_t rayUntilBlocked (uint64_t own, uint64_t enemy, const Vec2& pos, Direction dir);
-    uint64_t knight_mask (uint64_t own, uint64_t enemy, const Vec2& pos);
-    uint64_t bishop_mask (uint64_t own, uint64_t enemy, const Vec2& pos);
-    uint64_t rook_mask (uint64_t own, uint64_t enemy, const Vec2& pos);
-    uint64_t queen_mask (uint64_t own, uint64_t enemy, const Vec2& pos);
-    uint64_t king_mask (uint64_t own, uint64_t enemy, const Vec2& pos);
-    uint64_t pawn_attack_mask (uint64_t own, uint64_t enemy, const Vec2& pos);
-    uint64_t pawn_mask (uint64_t own, uint64_t enemy, const Vec2& pos);
-    uint64_t castle_mask (uint64_t own, uint64_t enemy, uint8_t flags, const Vec2& pos);
-
-} // end namespace
-*/
-
+// Struct for caching calculated attribs
+// during move generation and validation.
+struct MoveGenState {
+    std::vector<uint8_t> pinnedPieces;
+    std::vector<MoveIterator> moves;
+    uint64_t allPieces;
+    uint64_t enemyPieces;
+    MoveGenState (const Board& board);
+};
 
 
 void initializeBoard (Board& board);
@@ -127,14 +121,15 @@ const uint64_t* getPieceBoard (const Board& board, const PieceType& type);
 uint64_t getPieceBoard (Board& board, uint64_t mask, const PieceType& type);
 uint64_t getPieceBoard (const Board& board, uint64_t mask, const PieceType& type);
 
-MoveIterator generateMoveMask (const Board& state, const Vec2& pos, const PieceType& type);
-std::vector<MoveIterator> generateAllMoves (const Board& state);
+MoveIterator generateMoveMask (MoveGenState& genState, const Board& state, const Vec2& pos, const PieceType& type);
+void generateAllMoves (MoveGenState& genState, const Board& state);
 
-std::vector<Move> threatsToCell (const Board& board, const Vec2& pos);
+std::vector<Move> threatsToCells (const MoveGenState& genState, const Board& board, const std::initializer_list<Vec2>& positions);
+std::vector<Move> threatsToCell (const MoveGenState& genState, const Board& board, const Vec2& pos);
 
-bool validateMove (const Board& state, const Move& move);
+bool validateMove (const MoveGenState& genState, const Board& state, const Move& move);
 void applyMove (Board& state, const Move& move);
-Move bestMove (const Board& state, std::vector<MoveIterator>& moves);
+Move findBestMove (const MoveGenState& genState, const Board& state, std::vector<MoveIterator>& moves);
 int scoreBoard (const Board& state);
 
 void testMasks();

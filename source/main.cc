@@ -7,44 +7,32 @@
 
 using namespace morphy;
 
+/*
 int roll(int min, int max) {
    double x = rand()/static_cast<double>(RAND_MAX);
    int that = min + static_cast<int>( x * (max - min) );
    return that;
 }
+*/
 
 int main () {
-    //morphy::testMasks();
-    testMasks();
+    //testMasks();
+    std::cout << L"♚" << std::endl;
+    srand(time(NULL));
+
     Board state;
     initializeBoard(state);
-    printBoard(state);
 
-    std::cout << "----------------------\n";
+    for (int i = 0; i < 40; i++){
+        MoveGenState gs{state};
+        generateAllMoves(gs, state);
+        Move move = findBestMove(gs, state, gs.moves);
+        applyMove(state, move);
 
-    //applyMove(state,{PieceType::PAWN, 8, 16});
-    //printBoard(state);
-
-    for (int i = 0; i < 6; i++){
-        std::vector<MoveIterator> moveIters = generateAllMoves(state);
-        MoveIterator& moves = moveIters[roll(0, moveIters.size())-1];
-        while (!moves.hasMoves()){
-            moves = moveIters[roll(0, moveIters.size())-1];
-        }
-
-        int moveNum = roll(0, moves.moveCount());
-        int idx;
-        Move move;
-        do {
-            moves.nextMove(&move);
-            idx += 1;
-        } while (idx < moveNum);
-        applyMove(state,move);
-
-        std::cout << "----------------------\n";
-
+        std::cout << "--------------------\n";
+        std::cout << "--------------------\n";
         printBoard(state);
-        //std::cout << all_pieces(state) << std::endl;
         flipBoard(state);
     }
+
 }
