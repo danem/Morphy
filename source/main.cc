@@ -1,38 +1,39 @@
-#include "../include/board.h"
 #include <vector>
 #include <array>
 #include <iostream>
 #include <time.h>
 #include <random>
+#include <string>
+#include <unistd.h>
+#include <sys/wait.h>
+
+#include "../include/engine.h"
+#include "../include/uci.h"
+
 
 using namespace morphy;
 
-/*
-int roll(int min, int max) {
-   double x = rand()/static_cast<double>(RAND_MAX);
-   int that = min + static_cast<int>( x * (max - min) );
-   return that;
-}
-*/
 
 int main () {
     //testMasks();
-    std::cout << L"♚" << std::endl;
-    srand(time(NULL));
+    //std::istringstream input("position startpos moves a2a3 g8f6 h2h4 b8c6 e2e4 f6e4 f2f3 e4g3 h4h5 g3h1 d2d3 e7e5\n");
+    std::istringstream input("position startpos moves a2a3 g8f6 h2h4 b8c6\nisready\ngo movetime 1000\n");
+    std::cout.setf(std::ios::unitbuf);
+    //uci::IOPipe io(std::cout, std::cin, "./log.txt");
+    uci::IOPipe io(std::cout, input, "./log.txt");
 
-    Board state;
-    initializeBoard(state);
+    Engine engine;
+    UCIAdaptor uciengine(engine,io);
 
-    for (int i = 0; i < 40; i++){
-        MoveGenState gs{state};
-        generateAllMoves(gs, state);
-        Move move = findBestMove(gs, state, gs.moves);
-        applyMove(state, move);
-
-        std::cout << "--------------------\n";
-        std::cout << "--------------------\n";
-        printBoard(state);
-        flipBoard(state);
+    std::vector<std::string> message;
+    while (uciengine.isRunning()) {
+        std::string line;
+        io.readLine(line);
+        if (line.length() > 0) {
+            uci::splitString(line,message, ' ');
+            uciengine.handleUCIMessage(message);
+        }
+        message.clear();
     }
-
 }
+

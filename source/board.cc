@@ -18,19 +18,10 @@
 
 using namespace morphy;
 
-MoveGenState::MoveGenState (const Board& board) :
+MoveGenCache::MoveGenCache (const Board& board) :
     allPieces(all_pieces(board)),
     enemyPieces(enemy_pieces(board))
-    //canCastleKingSide(CHECK_BIT(board.current_castle_flags, CASTLE_KINGSIDE)),
-    //canCastleQueenSide(CHECK_BIT(board.current_castle_flags, CASTLE_QUEENSIDE))
 {}
-
-int roll(int min, int max) {
-   double x = rand()/static_cast<double>(RAND_MAX);
-   int that = min + static_cast<int>( x * (max - min) );
-   return that;
-}
-
 
 bool MaskIterator::hasBits() const {
     return mask != 0;
@@ -48,8 +39,18 @@ int MaskIterator::bitCount() const {
     return __builtin_clzll(mask);
 }
 
+ void MaskIterator::clearBit(uint16_t idx) {
+     mask = CLEAR_BIT(mask, idx);
+ }
+
 bool MoveIterator::hasMoves() const {
     return maskIter.hasBits();
+}
+
+bool MoveIterator::hasMove(const Move& move) const {
+    return type == move.type
+        && from == move.from
+        && CHECK_BIT(maskIter.mask,move.to);
 }
 
 int MoveIterator::moveCount() const {
@@ -64,11 +65,16 @@ bool MoveIterator::nextMove(Move* move){
     return true;
 }
 
+void MoveIterator::clearMove(uint16_t idx) {
+    maskIter.clearBit(idx);
+}
+
 enum Direction {
     NORTH, NORTHEAST, EAST, SOUTHEAST, SOUTH, SOUTHWEST, WEST, NORTHWEST
 };
 
 static const Vec2 dir_vectors[] = {{0,1}, {-1,1}, {-1,0}, {-1,-1}, {0,-1}, {1,-1}, {1,0}, {1,1}};
+
 
 static uint64_t rank_mask (uint8_t rank) {
     return static_cast<uint64_t>(0xff) << static_cast<uint64_t>(rank * 8);
@@ -155,7 +161,7 @@ static uint64_t rayUntilBlocked (uint64_t own, uint64_t enemy, const Vec2& pos, 
     Vec2 dirV = dir_vectors[dir];
     bool hit = false;
     Vec2 tmp = pos;
-    tmp.x += dirV.x; tmp.y += dirV.y;
+    //tmp.x += dirV.x; tmp.y += dirV.y;
     while (tmp.x >= 0 && tmp.x < 8 && tmp.y >= 0 && tmp.y < 8 && !hit) {
         if (CHECK_BIT(own,tmp.idx())) { hit = true; continue; }
         else if (CHECK_BIT(enemy,tmp.idx())) hit = true; // no continue so we mark the spot as available
@@ -179,17 +185,17 @@ static uint64_t knight_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
 }
 
 static uint64_t bishop_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
-    return rayUntilBlocked(own,enemy, pos, NORTHEAST)
+    return CLEAR_BIT(rayUntilBlocked(own,enemy, pos, NORTHEAST)
          | rayUntilBlocked(own,enemy, pos, NORTHWEST)
          | rayUntilBlocked(own,enemy, pos, SOUTHEAST)
-         | rayUntilBlocked(own,enemy, pos, SOUTHWEST);
+         | rayUntilBlocked(own,enemy, pos, SOUTHWEST), pos.idx());
 }
 
 static uint64_t rook_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
-    return rayUntilBlocked(own,enemy, pos, NORTH)
+    return CLEAR_BIT(rayUntilBlocked(own,enemy, pos, NORTH)
          | rayUntilBlocked(own,enemy, pos, SOUTH)
          | rayUntilBlocked(own,enemy, pos, EAST)
-         | rayUntilBlocked(own,enemy, pos, WEST);
+         | rayUntilBlocked(own,enemy, pos, WEST), pos.idx());
 }
 
 static uint64_t queen_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
@@ -199,7 +205,7 @@ static uint64_t queen_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
 static uint64_t king_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
     uint64_t mask = rect_mask(pos,{3,3});
     if (pos.idx() == 3) mask |= SET_BIT(0,1) | SET_BIT(0,6); // castle squares
-    return (mask & enemy) | (mask & ~own);
+    return CLEAR_BIT((mask & enemy) | (mask & ~own), pos.idx());
 }
 
 static uint64_t pawn_attack_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
@@ -207,7 +213,7 @@ static uint64_t pawn_attack_mask (uint64_t own, uint64_t enemy, const Vec2& pos)
                   | (SET_BIT(0,ROW_MAJOR(pos.x+1,pos.y+1)) & enemy);
     if (pos.x == 7) mask &= three_guard << 5;
     else if (pos.x == 0) mask &= three_guard;
-    return mask;
+    return CLEAR_BIT(mask,pos.idx());
 
 }
 
@@ -218,7 +224,7 @@ static uint64_t pawn_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
                   | (SET_BIT(0,ROW_MAJOR(pos.x+1,pos.y+1)) & enemy);
     if (pos.x == 7) mask &= three_guard << 5;
     else if (pos.x == 0) mask &= three_guard;
-    return mask;
+    return CLEAR_BIT(mask,pos.idx());
 }
 
 static uint64_t castle_mask (uint64_t own, uint64_t enemy, uint8_t flags, const Vec2& pos) {
@@ -231,7 +237,6 @@ static uint64_t castle_mask (uint64_t own, uint64_t enemy, uint8_t flags, const 
     return mask;
 }
 
-
 void morphy::initializeBoard (Board& board) {
     board.rooks   = SET_BIT(0,ROW_MAJOR(0,0)) | SET_BIT(0,ROW_MAJOR(7,0)) | SET_BIT(0,ROW_MAJOR(0,7)) | SET_BIT(0,ROW_MAJOR(7,7));
     board.knights = SET_BIT(0,ROW_MAJOR(1,0)) | SET_BIT(0,ROW_MAJOR(6,0)) | SET_BIT(0,ROW_MAJOR(1,7)) | SET_BIT(0,ROW_MAJOR(6,7));
@@ -241,8 +246,6 @@ void morphy::initializeBoard (Board& board) {
     board.pawns   = 0xff00 | 0xff000000000000;
     board.current_castle_flags = CASTLE_KINGSIDE | CASTLE_QUEENSIDE;
     board.other_castle_flags = board.current_castle_flags;
-    board.current_double_moves = 0xff;
-    board.other_double_moves = 0xff;
     board.current_bb = 0xffff;
     board.is_white = true;
 }
@@ -291,6 +294,7 @@ const uint64_t* morphy::getPieceBoard (const Board& board, const PieceType& type
     case PieceType::QUEEN:  return &board.queens;
     case PieceType::KING:   return &board.kings;
     case PieceType::PAWN:   return &board.pawns;
+    case PieceType::NONE:   return nullptr;
     }
 }
 
@@ -307,7 +311,22 @@ uint64_t morphy::getPieceBoard (const Board& board, uint64_t mask, const PieceTy
     return (*getPieceBoard(board,type)) & mask;
 }
 
-MoveIterator morphy::generateMoveMask (MoveGenState& genState, const Board& state, const Vec2& pos, const PieceType& type) {
+bool morphy::cellOccupiedByType (const Board& board, const PieceType type, uint16_t cell) {
+    return CHECK_BIT(*getPieceBoard(board, type), cell);
+}
+
+PieceType morphy::getPieceTypeAtCell (const Board& board, uint16_t cell) {
+    PieceType type = PieceType::NONE;
+    for (const auto v : all_piece_types) {
+        type = v;
+        if (type == PieceType::NONE) break;
+        if (cellOccupiedByType(board, v, cell)) break;
+    }
+    return type;
+
+}
+
+MoveIterator morphy::generateMoveMask (MoveGenCache& genState, const Board& state, const Vec2& pos, const PieceType& type) {
     uint64_t mask = 0;
     uint64_t own = state.current_bb;
     uint64_t enemy = genState.enemyPieces;
@@ -323,18 +342,44 @@ MoveIterator morphy::generateMoveMask (MoveGenState& genState, const Board& stat
         if (state.current_castle_flags != 0) mask |= castle_mask(own,enemy,state.current_castle_flags,pos);
         break;
     }
+    case PieceType::NONE: mask = 0;
     }
     return {type, static_cast<uint16_t>(pos.idx()), {mask}};
 }
 
-void morphy::generateAllMoves (MoveGenState& genState, const Board& state) {
+void morphy::generateAllMoves (MoveGenCache& genState, const Board& state) {
+    uint64_t moveCount = 0;
     for (const PieceType& t : all_piece_types) {
+        if (t == PieceType::NONE) continue;
         MaskIterator mask{getPieceBoard(state,state.current_bb,t)};
         uint16_t idx = 0;
         while (mask.nextBit(&idx)) {
-            genState.moves.emplace_back(generateMoveMask(genState, state,Vec2{static_cast<int16_t>(idx)},t));
+            MoveIterator mi = generateMoveMask(genState, state, Vec2{static_cast<int16_t>(idx)}, t);
+            moveCount += mi.moveCount();
+            genState.moves.emplace_back(mi);
         }
     }
+    genState.moveCount = moveCount;
+}
+
+void morphy::generateAllLegalMoves (MoveGenCache& genState, const Board& state) {
+    uint64_t moveCount = 0;
+    for (const PieceType& t : all_piece_types) {
+        if (t == PieceType::NONE) continue;
+        MaskIterator mask{getPieceBoard(state,state.current_bb,t)};
+        uint16_t idx = 0;
+        while (mask.nextBit(&idx)) {
+            MoveIterator mi = generateMoveMask(genState, state, Vec2{static_cast<int16_t>(idx)}, t);
+            MoveIterator tmp = mi;
+            Move move;
+            while (tmp.nextMove(&move)) {
+                if (!validateMove(genState,state,move)) mi.clearMove(move.to);
+            }
+            moveCount += mi.moveCount();
+            genState.moves.emplace_back(mi);
+        }
+    }
+    genState.moveCount = moveCount;
 }
 
 static uint8_t isCastleMove (const Move& move) {
@@ -344,12 +389,9 @@ static uint8_t isCastleMove (const Move& move) {
     else return NO_CASTLE;
 }
 
-// Move input is psuedo valid already. We then need to validate against the rest of the ruleset.
-// We don't check for check here as its pretty expensive, and we'll be able to determine this
-// in the next move anyways.
-// TODO: HANDLE EN PASSANT
-bool morphy::validateMove (const MoveGenState& genState, const Board& state, const Move& move) {
+bool morphy::validateMove (const MoveGenCache& genState, const Board& state, const Move& move) {
     uint64_t allPieces = genState.allPieces;
+    if (!CHECK_BIT(state.current_bb,move.from)) return false;
 
     uint8_t castle = isCastleMove(move);
     if (castle) {
@@ -376,18 +418,33 @@ bool morphy::validateMove (const MoveGenState& genState, const Board& state, con
 void morphy::applyMove (Board& state, const Move& move) {
     state.current_bb = MOVE_BIT(state.current_bb, move.from, move.to);
     for (const PieceType& t : all_piece_types) {
+        if (t == PieceType::NONE) continue;
         if (t == move.type) continue;
         uint64_t * bb = getPieceBoard(state, t);
         *bb = CLEAR_BIT(*bb, move.to);
     }
+
+    if (move.type == PieceType::PAWN && move.to >= 56) {
+        state.promotion_needed = true;
+        state.promotion_sq = move.to;
+    }
+
     uint64_t * bb = getPieceBoard(state, move.type);
     *bb = MOVE_BIT(*bb, move.from, move.to);
+
     uint8_t castle = isCastleMove(move);
-    if (castle == CASTLE_KINGSIDE) getPieceBoard(state,PieceType::ROOK);
+    if (castle == CASTLE_KINGSIDE) {
+        uint64_t* cb = getPieceBoard(state,PieceType::ROOK);
+        *cb = MOVE_BIT(*cb, 0, 2);
+    }
+    else if (castle == CASTLE_QUEENSIDE) {
+        uint64_t* cb = getPieceBoard(state,PieceType::ROOK);
+        *cb = MOVE_BIT(*cb, 7, 5);
+    }
 }
 
 // Determines where a cell is being attacked from.
-std::vector<Move> morphy::threatsToCells (const MoveGenState& genState, const Board& board, const std::initializer_list<Vec2>& positions){
+std::vector<Move> morphy::threatsToCells (const MoveGenCache& genState, const Board& board, const std::initializer_list<Vec2>& positions){
     std::vector<Move> res;
     uint64_t enemy = genState.enemyPieces;
     uint64_t own = board.current_bb;
@@ -397,6 +454,7 @@ std::vector<Move> morphy::threatsToCells (const MoveGenState& genState, const Bo
         uint16_t posIdx = static_cast<uint16_t>(p.idx());
 
         for (const PieceType& t : all_piece_types) {
+            if (t == PieceType::NONE) continue;
             if (t == PieceType::KING || t == PieceType::KNIGHT || t == PieceType::PAWN) continue;
 
             uint64_t mask = 0;
@@ -425,32 +483,10 @@ std::vector<Move> morphy::threatsToCells (const MoveGenState& genState, const Bo
     return res;
 }
 
-std::vector<Move> morphy::threatsToCell (const MoveGenState& genState, const Board& board, const Vec2& pos) {
+std::vector<Move> morphy::threatsToCell (const MoveGenCache& genState, const Board& board, const Vec2& pos) {
     return threatsToCells(genState,board,{pos});
 }
 
-int morphy::scoreBoard (const Board& state) {
-    return roll(-100,100);
-}
-
-Move morphy::findBestMove (const MoveGenState& genState, const Board& state, std::vector<MoveIterator>& moves) {
-    Move best;
-    Move currentMove;
-    int bestScore = std::numeric_limits<int>::min();
-    for (auto& mi : moves) {
-        while (mi.nextMove(&currentMove)) {
-            if (!validateMove(genState, state, currentMove)) continue;
-            Board tmp = state;
-            applyMove(tmp, currentMove);
-            int score = -scoreBoard(tmp);
-            if (score > bestScore) {
-                bestScore = score;
-                best = currentMove;
-            }
-        }
-    }
-    return best;
-}
 
 
 template <class T>
@@ -458,7 +494,7 @@ static void testMask (const char * name, T target, T real) {
     bool passed = target == real;
     std::cout << name << ": " ;
     if (passed) std::cout << "PASSED!\n";
-    else std::cout << "FAILED " << real << " != " << target << "\n";
+    else std::cout << "FAILED got: " << real << " expected: " << target << "\n";
 }
 
 void morphy::testMasks () {
@@ -481,11 +517,11 @@ void morphy::testMasks () {
     testMask<uint64_t>("ray northwest", 0x8040201008000000, rayUntilBlocked(0,0,{3,3},Direction::NORTHWEST));
     testMask<uint64_t>("ray southeast", 0x8040201, rayUntilBlocked(0,0,{3,3},Direction::SOUTHEAST));
     testMask<uint64_t>("ray southwest", 0x8102040, rayUntilBlocked(0,0,{3,3},Direction::SOUTHWEST));
-    testMask<uint64_t>("bishop mask 3,3", 0x8041221408142241, bishop_mask(0,0,{3,3}));
-    testMask<uint64_t>("rook mask 3,3", 0x8080808ff080808, rook_mask(0,0,{3,3}));
-    testMask<uint64_t>("queen mask 3,3", 0x88492a1cff1c2a49, queen_mask(0,0,{3,3}));
-    testMask<uint64_t>("queen mask 3,0",0x8080888492a1cff, queen_mask(0,0,{3,0}));
-    testMask<uint64_t>("king mask 0,0",0x303, king_mask(0,0,{0,0}));
+    testMask<uint64_t>("bishop mask 3,3", 9241705379636978241, bishop_mask(0,0,{3,3}));
+    testMask<uint64_t>("rook mask 3,3", 578721386714368008, rook_mask(0,0,{3,3}));
+    testMask<uint64_t>("queen mask 3,3", 9820426766351346249, queen_mask(0,0,{3,3}));
+    testMask<uint64_t>("queen mask 3,0", 578721933553179895, queen_mask(0,0,{3,0}));
+    testMask<uint64_t>("king mask 0,0",770, king_mask(0,0,{0,0}));
     testMask<uint64_t>("knight 3,3", 0x142200221400, knight_mask(0,0,{3,3}));
     testMask<uint64_t>("knight 0,3", 0x20400040200, knight_mask(0,0,{0,3}));
     testMask<uint64_t>("knight 7,3", 0x402000204000, knight_mask(0,0,{7,3}));
@@ -544,11 +580,11 @@ static void printBoard_internal (const Board& board, uint64_t mask, const char *
     }
 }
 
-void morphy::printBoard (const Board& gs) {
+void morphy::printBoard (const Board& gs, std::ostream& out) {
     char output[64] = {};
     for (int i = 0; i < 64; i++) { output[i] = '.'; }
 
-    std::array<const char *,2> pieces{{"prbnqk","PRBNQK"}};
+    std::array<const char *,2> pieces{{"PRBNQK","prbnqk"}};
     //std::array<char,2> pieces{{"♙♖♗♘♕♔","♟♜♝♞♛♚"}};
     // Always print from white's perspective
     bool was_white = gs.is_white;
@@ -561,8 +597,12 @@ void morphy::printBoard (const Board& gs) {
 
     for (int i = 0; i < 64; i++) {
         if (i%8==0 && i != 0) std::cout << "\n";
-        std::cout << output[i];
+        out << output[i];
     }
-    std::cout << "\n";
+    out << "\n";
+}
+
+std::string morphy::boardToFEN (const Board& board) {
+
 }
 

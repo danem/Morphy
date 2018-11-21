@@ -12,13 +12,17 @@ const uint8_t NO_CASTLE = 0;
 const uint8_t CASTLE_KINGSIDE = 1 << 0;
 const uint8_t CASTLE_QUEENSIDE = 1 << 2;
 
-enum class PieceType {
-    PAWN, ROOK, BISHOP, KNIGHT, QUEEN, KING
+enum class RuleSet {
+    STANDARD
 };
 
-static const std::array<PieceType,6> all_piece_types{
+enum class PieceType {
+    PAWN, ROOK, BISHOP, KNIGHT, QUEEN, KING, NONE
+};
+
+static const std::array<PieceType,7> all_piece_types{
     {PieceType::PAWN, PieceType::ROOK, PieceType::BISHOP,
-     PieceType::KNIGHT, PieceType::QUEEN, PieceType::KING}
+     PieceType::KNIGHT, PieceType::QUEEN, PieceType::KING, PieceType::NONE}
 };
 
 enum class PieceColor {
@@ -62,6 +66,7 @@ struct MaskIterator {
     bool hasBits () const;
     bool nextBit (uint16_t* dest);
     int bitCount () const;
+    void clearBit (uint16_t idx);
 };
 
 struct MoveIterator {
@@ -69,8 +74,10 @@ struct MoveIterator {
     uint16_t from;
     MaskIterator maskIter;
     bool hasMoves () const;
+    bool hasMove (const Move& move) const;
     int moveCount () const;
     bool nextMove (Move* dest);
+    void clearMove (uint16_t idx);
 };
 
 struct Board {
@@ -85,22 +92,36 @@ struct Board {
     uint64_t kings;
     uint64_t pawns;
     uint32_t en_passant_sq;
-    uint8_t current_double_moves;
-    uint8_t other_double_moves;
     uint8_t current_castle_flags;
     uint8_t other_castle_flags;
     uint64_t current_bb;
     bool is_white;
+    bool promotion_needed;
+    uint16_t promotion_sq;
 };
 
 // Struct for caching calculated attribs
 // during move generation and validation.
-struct MoveGenState {
-    std::vector<uint8_t> pinnedPieces;
-    std::vector<MoveIterator> moves;
+struct MoveGenCache {
+    Move prevMove;
     uint64_t allPieces;
     uint64_t enemyPieces;
-    MoveGenState (const Board& board);
+    uint64_t moveCount;
+    std::vector<MoveIterator> moves;
+    std::vector<MaskIterator> kingThreats;
+
+    MoveGenCache () {}
+    MoveGenCache (const Board& board);
+};
+
+struct MoveGenState {
+    size_t searchTime;
+    size_t depth;
+    size_t nodes;
+    size_t score;
+    size_t moveNumber;
+    Move currentMove;
+    std::vector<Move> bestPath;
 };
 
 
@@ -116,23 +137,25 @@ uint64_t enemy_pieces (const Board& board);
 // eg Get ALL rooks
 uint64_t* getPieceBoard (Board& board, const PieceType& type);
 const uint64_t* getPieceBoard (const Board& board, const PieceType& type);
+bool cellOccupiedByType (const Board& board, const PieceType type, uint16_t cell);
+PieceType getPieceTypeAtCell (const Board& board, uint16_t cell);
 
 // eg Get white rooks
 uint64_t getPieceBoard (Board& board, uint64_t mask, const PieceType& type);
 uint64_t getPieceBoard (const Board& board, uint64_t mask, const PieceType& type);
 
-MoveIterator generateMoveMask (MoveGenState& genState, const Board& state, const Vec2& pos, const PieceType& type);
-void generateAllMoves (MoveGenState& genState, const Board& state);
+MoveIterator generateMoveMask (MoveGenCache& genState, const Board& state, const Vec2& pos, const PieceType& type);
+void generateAllMoves (MoveGenCache& genState, const Board& state);
+void generateAllLegalMoves (MoveGenCache& genState, const Board& state);
 
-std::vector<Move> threatsToCells (const MoveGenState& genState, const Board& board, const std::initializer_list<Vec2>& positions);
-std::vector<Move> threatsToCell (const MoveGenState& genState, const Board& board, const Vec2& pos);
+std::vector<Move> threatsToCells (const MoveGenCache& genState, const Board& board, const std::initializer_list<Vec2>& positions);
+std::vector<Move> threatsToCell (const MoveGenCache& genState, const Board& board, const Vec2& pos);
 
-bool validateMove (const MoveGenState& genState, const Board& state, const Move& move);
+bool validateMove (const MoveGenCache& genState, const Board& state, const Move& move);
 void applyMove (Board& state, const Move& move);
-Move findBestMove (const MoveGenState& genState, const Board& state, std::vector<MoveIterator>& moves);
-int scoreBoard (const Board& state);
 
 void testMasks();
-void printBoard (const Board& board);
-
+void printBoard (const Board& board, std::ostream& out);
+std::string boardToFEN (const Board& board);
+bool boardFromFEN (Board& board);
 } // end namespace
