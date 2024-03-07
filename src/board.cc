@@ -185,7 +185,7 @@ static uint64_t rayUntilBlocked (uint64_t own, uint64_t enemy, const Vec2& pos, 
     // Includes cell where blocked
     uint64_t blockers = CLEAR_BIT((own | enemy), pos);
     uint64_t move_mask = ray_in_direction(pos, dir);
-    uint8_t hit = LSB_FIRST(move_mask & blockers);
+    uint8_t hit = LSB_FIRST(move_mask & blockers) - 1;
     uint64_t anti_mask = ray_in_direction({hit}, dir);
     return move_mask & ~anti_mask;
 }
@@ -204,17 +204,17 @@ static constexpr uint64_t knight_mask (uint64_t own, uint64_t enemy, const Vec2&
 }
 
 static uint64_t bishop_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
-    return CLEAR_BIT(rayUntilBlocked(own,enemy, pos, Direction::NORTHEAST)
-         | rayUntilBlocked(own,enemy, pos, Direction::NORTHWEST)
-         | rayUntilBlocked(own,enemy, pos, Direction::SOUTHEAST)
-         | rayUntilBlocked(own,enemy, pos, Direction::SOUTHWEST), pos.idx);
+    return rayUntilBlocked(own, enemy, pos, Direction::NORTHEAST)
+         | rayUntilBlocked(own, enemy, pos, Direction::NORTHWEST)
+         | rayUntilBlocked(own, enemy, pos, Direction::SOUTHEAST)
+         | rayUntilBlocked(own, enemy, pos, Direction::SOUTHWEST);
 }
 
 static constexpr uint64_t rook_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
-    return CLEAR_BIT(rayUntilBlocked(own,enemy, pos, Direction::NORTH)
+    return rayUntilBlocked(own,enemy, pos, Direction::NORTH)
          | rayUntilBlocked(own,enemy, pos, Direction::SOUTH)
          | rayUntilBlocked(own,enemy, pos, Direction::EAST)
-         | rayUntilBlocked(own,enemy, pos, Direction::WEST), pos.idx);
+         | rayUntilBlocked(own,enemy, pos, Direction::WEST);
 }
 
 static constexpr uint64_t queen_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
