@@ -5,6 +5,7 @@
 #include <vector>
 #include <array>
 #include <random>
+#include <format>
 
 #define BIT_MASK(idx) (static_cast<uint64_t>(1) << (idx))
 #define SET_BIT(v,idx) ((v) | BIT_MASK(idx))
@@ -12,15 +13,12 @@
 #define MOVE_BIT(v,from,to) (SET_BIT(CLEAR_BIT((v),(from)),(to)))
 #define CHECK_BIT(v,idx) (((v) & BIT_MASK(idx)) == BIT_MASK(idx))
 #define INVERT_MASK(v) ((v) ^ 0xffffffffffffffff)
-#define LSB_FIRST(v) (__builtin_ffsll(v))
-#define MSB_FIRST(v) (__builtin_clzll(v))
+#define LSB_FIRST(v) (__builtin_ffsll(v) ) // Zero indexed
+#define MSB_FIRST(v) (__builtin_clzll(v) )
 #define ROW_MAJOR(x,y) ((y) * 8 + (x))
 #define FLIP_BB(bb) __builtin_bswap64(bb)
 
 using namespace morphy;
-
-uint64_t _RAYS[10000];
-
 
 enum Direction {
     NORTH, NORTHEAST, EAST, SOUTHEAST, SOUTH, SOUTHWEST, WEST, NORTHWEST
@@ -39,7 +37,7 @@ bool MaskIterator::nextBit(uint16_t * dest){
     int idx = LSB_FIRST(mask);
     if (idx == 0) return false;
     mask = CLEAR_BIT(mask, idx-1);
-    *dest = static_cast<int16_t>(idx - 1);
+    *dest = idx - 1;
     return true;
 }
 
@@ -78,40 +76,38 @@ void MoveIterator::clearMove(uint16_t idx) {
 }
 
 
-static const Vec2 dir_vectors[] = {{0,1}, {-1,1}, {-1,0}, {-1,-1}, {0,-1}, {1,-1}, {1,0}, {1,1}};
-
-
-static uint64_t rank_mask (uint8_t rank) {
+static constexpr uint64_t rank_mask (uint8_t rank) {
     return static_cast<uint64_t>(0xff) << static_cast<uint64_t>(rank * 8);
 }
 
-static uint64_t file_mask (uint8_t file) {
+static constexpr uint64_t file_mask (uint8_t file) {
     return static_cast<uint64_t>(0x101010101010101) << file;
 }
 
-static const uint64_t two_guard = file_mask(0) | file_mask(1);
-static const uint64_t three_guard = two_guard | file_mask(2);
+static constexpr uint64_t two_guard = file_mask(0) | file_mask(1);
+static constexpr uint64_t three_guard = two_guard | file_mask(2);
 
 // https://chessprogramming.wikispaces.com/On+an+empty+Board#RayAttacks
-static uint64_t diagonal_mask(uint8_t center) {
+static constexpr uint64_t diagonal_mask(uint8_t center) {
    const uint64_t maindia = 0x8040201008040201;
-   int diag =8*(center & 7) - (center & 56);
+   int diag = 8*(center & 7) - (center & 56);
    int north = -diag & ( diag >> 31);
    int south =  diag & (-diag >> 31);
    return (maindia >> south) << north;
 }
 
-static uint64_t antidiagonal_mask(uint8_t center) {
+static constexpr uint64_t antidiagonal_mask(uint8_t center) {
   const uint64_t maindia = 0x0102040810204080;
-  int diag =56- 8*(center&7) - (center&56);
+  int diag = 56 - 8*(center&7) - (center&56);
   int north = -diag & ( diag >> 31);
   int south =  diag & (-diag >> 31);
   return (maindia >> south) << north;
 }
 
+
 // https://chessprogramming.wikispaces.com/Flipping+Mirroring+and+Rotating
 // See 'flipDiagA1H8'
-static uint64_t flipDiagA1H8(uint64_t x) {
+static constexpr uint64_t flipDiagA1H8(uint64_t x) {
   uint64_t t;
   const uint64_t k1 = 0x5500550055005500;
   const uint64_t k2 = 0x3333000033330000;
@@ -125,7 +121,7 @@ static uint64_t flipDiagA1H8(uint64_t x) {
   return x;
 }
 
-static uint64_t mirror_horizontal (uint64_t x) {
+static constexpr uint64_t mirror_horizontal (uint64_t x) {
    const uint64_t k1 = 0x5555555555555555;
    const uint64_t k2 = 0x3333333333333333;
    const uint64_t k4 = 0x0f0f0f0f0f0f0f0f;
@@ -135,7 +131,7 @@ static uint64_t mirror_horizontal (uint64_t x) {
    return x;
 }
 
-static uint64_t flip_vertical(uint64_t x)
+static constexpr uint64_t flip_vertical(uint64_t x)
 {
   return
     ( (x << 56)                        ) |
@@ -148,21 +144,10 @@ static uint64_t flip_vertical(uint64_t x)
     ( (x >> 56)                        );
 }
 
-// TODO: This is probably unnecessarily slow
-static uint64_t rect_mask (const Vec2& center, const Vec2& size) {
-    uint64_t res = 0;
-    uint16_t hw = size.x / 2;
-    uint16_t hh = size.y / 2;
-    for (int x = center.x-hw; x <= center.x+hw; x++){
-        for (int y = center.y-hh; y <= center.y+hh; y++){
-            if (x >= 0 && y >= 0 && x < 8 && y < 8) res |= BIT_MASK(ROW_MAJOR(x,y));
-        }
-    }
-    return res;
-}
-
-static uint64_t full_rank_mask (uint8_t start, uint8_t end){
+static constexpr uint64_t full_rank_mask (uint8_t start, uint8_t end){
     uint8_t height = end - start;
+    if (height == 0) return 0;
+
     uint64_t fullMask = 0xffffffffffffffff;
 
     fullMask = fullMask >> ((8 - height) * 8);
@@ -170,41 +155,43 @@ static uint64_t full_rank_mask (uint8_t start, uint8_t end){
     return fullMask;
 }
 
-static uint64_t full_file_mask (uint8_t start, uint8_t end){
+static constexpr uint64_t full_file_mask (uint8_t start, uint8_t end){
     return flipDiagA1H8(full_rank_mask(start, end));
 }
 
-static uint64_t ray_in_direction (const Vec2& pos, Direction dir){
+static constexpr uint64_t ray_in_direction (const Vec2& pos, Direction dir){
+    // TODO: In the future use a precomputed lookup table + magic bit boards
     switch (dir) {
     case Direction::NORTH:
-        return file_mask(pos.x) & full_rank_mask(pos.y, 8);
+        return file_mask(pos.x) & full_rank_mask(pos.y+1, 8);
     case Direction::SOUTH:
         return file_mask(pos.x) & full_rank_mask(0, pos.y);
     case Direction::EAST:
-        return rank_mask(pos.y) & full_file_mask(pos.x, 8);
+        return rank_mask(pos.y) & full_file_mask(pos.x+1, 8);
     case Direction::WEST:
         return rank_mask(pos.y) & full_file_mask(0, pos.x);
     case Direction::NORTHEAST:
-        return diagonal_mask(pos.idx) & full_rank_mask(pos.y, 8);
+        return diagonal_mask(pos.idx) & full_rank_mask(pos.y+1, 8);
     case Direction::SOUTHWEST:
         return diagonal_mask(pos.idx) & full_rank_mask(0, pos.y);
     case Direction::NORTHWEST:
-        return antidiagonal_mask(pos.idx) & full_rank_mask(pos.y, 8);
+        return antidiagonal_mask(pos.idx) & full_rank_mask(pos.y+1, 8);
     case Direction::SOUTHEAST:
         return antidiagonal_mask(pos.idx) & full_rank_mask(0, pos.y);
     }
 }
 
 static uint64_t rayUntilBlocked (uint64_t own, uint64_t enemy, const Vec2& pos, Direction dir) {
-    uint64_t blockers = CLEAR_BIT((own | enemy), pos.idx);
+    // Includes cell where blocked
+    uint64_t blockers = CLEAR_BIT((own | enemy), pos);
     uint64_t move_mask = ray_in_direction(pos, dir);
-    uint64_t hit = LSB_FIRST(move_mask & blockers);
-    uint64_t anti_mask = ray_in_direction({static_cast<int16_t>(hit)}, dir);
+    uint8_t hit = LSB_FIRST(move_mask & blockers);
+    uint64_t anti_mask = ray_in_direction({hit}, dir);
     return move_mask & ~anti_mask;
 }
 
 
-static uint64_t knight_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
+static constexpr uint64_t knight_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
     uint64_t tl = 258;
     uint64_t bl = 513;
     int16_t idx = pos.idx;
@@ -217,47 +204,48 @@ static uint64_t knight_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
 }
 
 static uint64_t bishop_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
-    return CLEAR_BIT(rayUntilBlocked(own,enemy, pos, NORTHEAST)
-         | rayUntilBlocked(own,enemy, pos, NORTHWEST)
-         | rayUntilBlocked(own,enemy, pos, SOUTHEAST)
-         | rayUntilBlocked(own,enemy, pos, SOUTHWEST), pos.idx);
+    return CLEAR_BIT(rayUntilBlocked(own,enemy, pos, Direction::NORTHEAST)
+         | rayUntilBlocked(own,enemy, pos, Direction::NORTHWEST)
+         | rayUntilBlocked(own,enemy, pos, Direction::SOUTHEAST)
+         | rayUntilBlocked(own,enemy, pos, Direction::SOUTHWEST), pos.idx);
 }
 
-static uint64_t rook_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
-    return CLEAR_BIT(rayUntilBlocked(own,enemy, pos, NORTH)
-         | rayUntilBlocked(own,enemy, pos, SOUTH)
-         | rayUntilBlocked(own,enemy, pos, EAST)
-         | rayUntilBlocked(own,enemy, pos, WEST), pos.idx);
+static constexpr uint64_t rook_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
+    return CLEAR_BIT(rayUntilBlocked(own,enemy, pos, Direction::NORTH)
+         | rayUntilBlocked(own,enemy, pos, Direction::SOUTH)
+         | rayUntilBlocked(own,enemy, pos, Direction::EAST)
+         | rayUntilBlocked(own,enemy, pos, Direction::WEST), pos.idx);
 }
 
-static uint64_t queen_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
+static constexpr uint64_t queen_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
     return rook_mask(own,enemy,pos) | bishop_mask(own,enemy,pos);
 }
 
 static uint64_t king_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
-    uint64_t mask = rect_mask(pos,{3,3});
-    if (pos.idx == 3) mask |= SET_BIT(0,1) | SET_BIT(0,6); // castle squares
-    return CLEAR_BIT((mask & enemy) | (mask & ~own), pos.idx);
+    uint64_t mask = SET_BIT(0, pos);
+    mask |= (mask << 1 | mask >> 1 | mask << 7 | mask << 8 | mask << 9 | mask >> 7 | mask >> 8 | mask >> 9);
+    uint64_t edge_mask = pos.x == 0 || pos.x == 7 ? file_mask(7 - pos.x) : 0;
+    return CLEAR_BIT((mask & ~own) & ~edge_mask, pos);
 }
 
 static uint64_t pawn_attack_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
-    uint64_t mask = (SET_BIT(0,ROW_MAJOR(pos.x-1,pos.y+1)) & enemy)
-                  | (SET_BIT(0,ROW_MAJOR(pos.x+1,pos.y+1)) & enemy);
-    if (pos.x == 7) mask &= three_guard << 5;
-    else if (pos.x == 0) mask &= three_guard;
-    return CLEAR_BIT(mask,pos.idx);
-
+    uint64_t edge_mask = pos.x == 0 || pos.x == 7 ? file_mask(7 - pos.x) : 0;
+    uint64_t pmask = SET_BIT(0, pos);
+    uint64_t mask = (pmask << 7) & enemy | (pmask << 9) & enemy;
+    return mask & ~own;
 }
 
-static uint64_t pawn_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
-    uint64_t mask = (SET_BIT(0,ROW_MAJOR(pos.x,pos.y+1)) & ~enemy)
-                  | (SET_BIT(0,ROW_MAJOR(pos.x,pos.y+2)) & ~enemy)
-                  | (SET_BIT(0,ROW_MAJOR(pos.x-1,pos.y+1)) & enemy)
-                  | (SET_BIT(0,ROW_MAJOR(pos.x+1,pos.y+1)) & enemy);
-    if (pos.x == 7) mask &= three_guard << 5;
-    else if (pos.x == 0) mask &= three_guard;
-    return CLEAR_BIT(mask,pos.idx);
+static uint64_t pawn_move_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
+    uint64_t blockers = own | enemy;
+    uint64_t mask = SET_BIT(0, pos.idx + 8) & ~blockers;
+    if (mask) mask = SET_BIT(mask, pos.idx + 16) & ~blockers;
+    return mask;
 }
+
+static uint64_t pawn_mask (uint64_t own, uint64_t enemy, const Vec2& pos){
+    return pawn_attack_mask(own, enemy, pos) | pawn_move_mask(own, enemy, pos);
+}
+
 
 static uint64_t castle_mask (uint64_t own, uint64_t enemy, uint8_t flags, const Vec2& pos) {
     uint64_t mask = 0;
@@ -294,12 +282,19 @@ void morphy::flipBoard (Board& board) {
     board.is_white = !board.is_white;
 }
 
-void morphy::setPiece (Board& board, PieceType& type, const Vec2& pos) {
+void morphy::setBoardColor (Board& board, bool white){
+    if ((board.is_white && white) || (!board.is_white && !white)){
+        return;
+    }
+    flipBoard(board);
+}
+
+void morphy::setPiece (Board& board, PieceType type, const Vec2& pos) {
     uint64_t* bb = getPieceBoard(board, type);
     *bb = SET_BIT(*bb, pos);
 }
 
-void morphy::clearPiece (Board& board, PieceType& type, const Vec2& pos) {
+void morphy::clearPiece (Board& board, PieceType type, const Vec2& pos) {
     uint64_t* bb = getPieceBoard(board, type);
     *bb = CLEAR_BIT(*bb, pos);
 }
@@ -318,7 +313,7 @@ uint64_t morphy::enemy_pieces (const Board& board) {
 }
 
 
-const uint64_t* morphy::getPieceBoard (const Board& board, const PieceType& type) {
+const uint64_t* morphy::getPieceBoard (const Board& board, PieceType type) {
     switch (type) {
     case PieceType::ROOK:   return &board.rooks;
     case PieceType::BISHOP: return &board.bishops;
@@ -330,20 +325,20 @@ const uint64_t* morphy::getPieceBoard (const Board& board, const PieceType& type
     }
 }
 
-uint64_t* morphy::getPieceBoard (Board& board, const PieceType& type) {
+uint64_t* morphy::getPieceBoard (Board& board, PieceType type) {
     const uint64_t* res = getPieceBoard(static_cast<const Board&>(board),type);
     return const_cast<uint64_t*>(res);
 }
 
-uint64_t morphy::getPieceBoard (Board& board, uint64_t mask, const PieceType& type) {
+uint64_t morphy::getPieceBoard (Board& board, uint64_t mask, PieceType type) {
     return (*getPieceBoard(board,type)) & mask;
 }
 
-uint64_t morphy::getPieceBoard (const Board& board, uint64_t mask, const PieceType& type) {
+uint64_t morphy::getPieceBoard (const Board& board, uint64_t mask, PieceType type) {
     return (*getPieceBoard(board,type)) & mask;
 }
 
-bool morphy::cellOccupiedByType (const Board& board, const PieceType type, uint16_t cell) {
+bool morphy::cellOccupiedByType (const Board& board, PieceType type, uint16_t cell) {
     return CHECK_BIT(*getPieceBoard(board, type), cell);
 }
 
@@ -358,7 +353,7 @@ PieceType morphy::getPieceTypeAtCell (const Board& board, uint16_t cell) {
 
 }
 
-MoveIterator morphy::generateMoveMask (MoveGenCache& genState, const Board& state, const Vec2& pos, const PieceType& type) {
+MoveIterator morphy::generateMoveMask (MoveGenCache& genState, const Board& state, const Vec2& pos, PieceType type) {
     uint64_t mask = 0;
     uint64_t own = state.current_bb;
     uint64_t enemy = genState.enemyPieces;
@@ -386,7 +381,7 @@ void morphy::generateAllMoves (MoveGenCache& genState, const Board& state) {
         MaskIterator mask{getPieceBoard(state,state.current_bb,t)};
         uint16_t idx = 0;
         while (mask.nextBit(&idx)) {
-            MoveIterator mi = generateMoveMask(genState, state, Vec2{static_cast<int16_t>(idx)}, t);
+            MoveIterator mi = generateMoveMask(genState, state, Vec2{idx}, t);
             moveCount += mi.moveCount();
             genState.moves.emplace_back(mi);
         }
@@ -401,7 +396,7 @@ void morphy::generateAllLegalMoves (MoveGenCache& genState, const Board& state) 
         MaskIterator mask{getPieceBoard(state,state.current_bb,t)};
         uint16_t idx = 0;
         while (mask.nextBit(&idx)) {
-            MoveIterator mi = generateMoveMask(genState, state, Vec2{static_cast<int16_t>(idx)}, t);
+            MoveIterator mi = generateMoveMask(genState, state, Vec2{idx}, t);
             MoveIterator tmp = mi;
             Move move;
             while (tmp.nextMove(&move)) {
@@ -492,7 +487,7 @@ std::vector<Move> morphy::threatsToCells (const MoveGenCache& genState, const Bo
             uint64_t mask = 0;
             if (t == PieceType::ROOK) mask = rook_mask(own,enemy,p);
             else if (t == PieceType::BISHOP) mask = bishop_mask(own,enemy,p);
-            else if (t == PieceType::QUEEN) mask = bishop_mask(own,enemy,p) | rook_mask(own,enemy,p);
+            else if (t == PieceType::QUEEN) mask = queen_mask(own,enemy,p);
 
             uint64_t bb = getPieceBoard(board,enemy,t);
             MaskIterator p{mask & bb};
@@ -522,6 +517,7 @@ std::vector<Move> morphy::threatsToCell (const MoveGenCache& genState, const Boa
 
 static void printBoard_internal (const Board& board, uint64_t mask, const char * tiles, char * output){
     for (const auto& t : all_piece_types){
+        if (t == PieceType::NONE) continue;
         uint16_t tile = tiles[static_cast<uint8_t>(t)];
         MaskIterator bb{getPieceBoard(board, mask, t)};
         uint16_t idx = 0;
@@ -531,20 +527,17 @@ static void printBoard_internal (const Board& board, uint64_t mask, const char *
     }
 }
 
-void morphy::printBoard (const Board& gs, std::ostream& out) {
+void morphy::printBoard (Board board, std::ostream& out) {
     char output[64] = {};
     for (int i = 0; i < 64; i++) { output[i] = '.'; }
 
     std::array<const char *,2> pieces{{"PRBNQK","prbnqk"}};
     //std::array<char,2> pieces{{"♙♖♗♘♕♔","♟♜♝♞♛♚"}};
     // Always print from white's perspective
-    bool was_white = gs.is_white;
-    if (!was_white) flipBoard(const_cast<Board&>(gs));
+    setBoardColor(board, true);
 
-    printBoard_internal(gs, gs.current_bb, pieces[0], output);
-    printBoard_internal(gs, enemy_pieces(gs), pieces[1], output);
-
-    if (!was_white) flipBoard(const_cast<Board&>(gs));
+    printBoard_internal(board, board.current_bb, pieces[1], output);
+    printBoard_internal(board, enemy_pieces(board), pieces[0], output);
 
     for (int i = 0; i < 64; i++) {
         if (i%8==0 && i != 0) std::cout << "\n";
@@ -552,8 +545,3 @@ void morphy::printBoard (const Board& gs, std::ostream& out) {
     }
     out << "\n";
 }
-
-std::string morphy::boardToFEN (const Board& board) {
-
-}
-

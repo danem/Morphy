@@ -33,23 +33,23 @@ static const std::array<PieceColor,2> all_piece_colors{{PieceColor::WHITE, Piece
 
 
 struct Vec2 {
-    int16_t x;
-    int16_t y;
-    int16_t idx;
+    uint16_t x;
+    uint16_t y;
+    uint16_t idx;
 
-    Vec2 (int16_t rank, int16_t file) :
+    Vec2 (uint16_t rank, uint16_t file) :
         x(rank),
         y(file),
         idx(y*8+x)
     {}
 
-    Vec2 (int16_t idx) :
+    Vec2 (uint16_t idx) :
         x(idx%8),
         y(idx/8),
         idx(idx)
     {}
 
-    operator int16_t() const { return idx; }
+    operator uint16_t() const { return idx; }
 };
 
 struct Move {
@@ -88,19 +88,19 @@ struct Board {
     // and black. To get white rooks, rooks & current_bb.
     // To get black rooks, (all_pieces ^ current_bb) & rooks.
     // All functions are from white's perspective.
-    uint64_t rooks;
-    uint64_t bishops;
-    uint64_t knights;
-    uint64_t queens;
-    uint64_t kings;
-    uint64_t pawns;
-    uint32_t en_passant_sq;
-    uint8_t current_castle_flags;
-    uint8_t other_castle_flags;
-    uint64_t current_bb;
-    bool is_white;
-    bool promotion_needed;
-    uint16_t promotion_sq;
+    uint64_t rooks = 0;
+    uint64_t bishops = 0;
+    uint64_t knights = 0;
+    uint64_t queens = 0;
+    uint64_t kings = 0;
+    uint64_t pawns = 0;
+    uint32_t en_passant_sq = 0;
+    uint8_t current_castle_flags = 0;
+    uint8_t other_castle_flags = 0;
+    uint64_t current_bb = 0;
+    bool is_white = true;
+    bool promotion_needed = false;
+    uint16_t promotion_sq = 0;
 };
 
 // Struct for caching calculated attribs
@@ -131,24 +131,25 @@ struct MoveGenState {
 
 void initializeBoard (Board& board);
 void flipBoard (Board& board);
+void setBoardColor (Board& board, bool white);
 
-void setPiece (Board& board, PieceType& type, const Vec2& pos);
-void clearPiece (Board& board, PieceType& type, const Vec2& pos) ;
+void setPiece (Board& board, PieceType type, const Vec2& pos);
+void clearPiece (Board& board, PieceType type, const Vec2& pos) ;
 
 uint64_t all_pieces (const Board& board);
 uint64_t enemy_pieces (const Board& board);
 
 // eg Get ALL rooks
-uint64_t* getPieceBoard (Board& board, const PieceType& type);
-const uint64_t* getPieceBoard (const Board& board, const PieceType& type);
-bool cellOccupiedByType (const Board& board, const PieceType type, uint16_t cell);
+uint64_t* getPieceBoard (Board& board, PieceType type);
+const uint64_t* getPieceBoard (const Board& board, PieceType type);
+bool cellOccupiedByType (const Board& board, PieceType type, uint16_t cell);
 PieceType getPieceTypeAtCell (const Board& board, uint16_t cell);
 
 // eg Get white rooks
-uint64_t getPieceBoard (Board& board, uint64_t mask, const PieceType& type);
-uint64_t getPieceBoard (const Board& board, uint64_t mask, const PieceType& type);
+uint64_t getPieceBoard (Board& board, uint64_t mask, PieceType type);
+uint64_t getPieceBoard (const Board& board, uint64_t mask, PieceType type);
 
-MoveIterator generateMoveMask (MoveGenCache& genState, const Board& state, const Vec2& pos, const PieceType& type);
+MoveIterator generateMoveMask (MoveGenCache& genState, const Board& state, const Vec2& pos, PieceType type);
 void generateAllMoves (MoveGenCache& genState, const Board& state);
 void generateAllLegalMoves (MoveGenCache& genState, const Board& state);
 
@@ -158,8 +159,8 @@ std::vector<Move> threatsToCell (const MoveGenCache& genState, const Board& boar
 bool validateMove (const MoveGenCache& genState, const Board& state, const Move& move);
 void applyMove (Board& state, const Move& move);
 
-void printBoard (const Board& board, std::ostream& out);
+void printBoard (Board board, std::ostream& out);
 std::string boardToFEN (const Board& board);
-bool boardFromFEN (Board& board);
+bool boardFromFEN (Board& board, const std::string& fen);
 
 } // end namespace
