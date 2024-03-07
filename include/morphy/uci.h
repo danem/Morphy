@@ -129,8 +129,6 @@ void signalBestMove (std::ostream& stream, const Move& move, const Move& ponder)
 void logMessage (std::ostream& stream, const std::string& message);
 //void moveGenInfo (std::stringstream& stream, const MoveGenState& gen);
 
-
-
 } // end namespace
 } // end namespace
 

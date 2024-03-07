@@ -12,6 +12,7 @@ const uint8_t NO_CASTLE = 0;
 const uint8_t CASTLE_KINGSIDE = 1 << 0;
 const uint8_t CASTLE_QUEENSIDE = 1 << 2;
 
+
 enum class RuleSet {
     STANDARD
 };
@@ -34,19 +35,21 @@ static const std::array<PieceColor,2> all_piece_colors{{PieceColor::WHITE, Piece
 struct Vec2 {
     int16_t x;
     int16_t y;
+    int16_t idx;
 
     Vec2 (int16_t rank, int16_t file) :
         x(rank),
-        y(file)
+        y(file),
+        idx(y*8+x)
     {}
 
     Vec2 (int16_t idx) :
         x(idx%8),
-        y(idx/8)
+        y(idx/8),
+        idx(idx)
     {}
 
-    int16_t idx () const { return y * 8 + x; }
-    operator int16_t() const { return idx(); }
+    operator int16_t() const { return idx; }
 };
 
 struct Move {
@@ -125,6 +128,7 @@ struct MoveGenState {
 };
 
 
+
 void initializeBoard (Board& board);
 void flipBoard (Board& board);
 
@@ -154,8 +158,8 @@ std::vector<Move> threatsToCell (const MoveGenCache& genState, const Board& boar
 bool validateMove (const MoveGenCache& genState, const Board& state, const Move& move);
 void applyMove (Board& state, const Move& move);
 
-void testMasks();
 void printBoard (const Board& board, std::ostream& out);
 std::string boardToFEN (const Board& board);
 bool boardFromFEN (Board& board);
+
 } // end namespace

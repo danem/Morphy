@@ -7,8 +7,8 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
-#include "../include/engine.h"
-#include "../include/uci.h"
+#include <morphy/engine.h>
+#include <morphy/uci.h>
 
 
 using namespace morphy;

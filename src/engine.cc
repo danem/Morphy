@@ -1,4 +1,4 @@
-#include "../include/engine.h"
+#include <morphy/engine.h>
 #include <random>
 
 using namespace morphy;

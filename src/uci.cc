@@ -1,4 +1,4 @@
-#include "../include/uci.h"
+#include <morphy/uci.h>
 
 using namespace morphy::uci;
 

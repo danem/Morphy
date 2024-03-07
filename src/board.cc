@@ -1,4 +1,5 @@
-#include "../include/board.h"
+#include <morphy/board.h>
+
 #include <iostream>
 #include <sstream>
 #include <vector>
@@ -17,6 +18,13 @@
 #define FLIP_BB(bb) __builtin_bswap64(bb)
 
 using namespace morphy;
+
+uint64_t _RAYS[10000];
+
+
+enum Direction {
+    NORTH, NORTHEAST, EAST, SOUTHEAST, SOUTH, SOUTHWEST, WEST, NORTHWEST
+};
 
 MoveGenCache::MoveGenCache (const Board& board) :
     allPieces(all_pieces(board)),
@@ -69,9 +77,6 @@ void MoveIterator::clearMove(uint16_t idx) {
     maskIter.clearBit(idx);
 }
 
-enum Direction {
-    NORTH, NORTHEAST, EAST, SOUTHEAST, SOUTH, SOUTHWEST, WEST, NORTHWEST
-};
 
 static const Vec2 dir_vectors[] = {{0,1}, {-1,1}, {-1,0}, {-1,-1}, {0,-1}, {1,-1}, {1,0}, {1,1}};
 
@@ -91,17 +96,17 @@ static const uint64_t three_guard = two_guard | file_mask(2);
 static uint64_t diagonal_mask(uint8_t center) {
    const uint64_t maindia = 0x8040201008040201;
    int diag =8*(center & 7) - (center & 56);
-   int nort = -diag & ( diag >> 31);
-   int sout =  diag & (-diag >> 31);
-   return (maindia >> sout) << nort;
+   int north = -diag & ( diag >> 31);
+   int south =  diag & (-diag >> 31);
+   return (maindia >> south) << north;
 }
 
 static uint64_t antidiagonal_mask(uint8_t center) {
   const uint64_t maindia = 0x0102040810204080;
   int diag =56- 8*(center&7) - (center&56);
-  int nort = -diag & ( diag >> 31);
-  int sout =  diag & (-diag >> 31);
-  return (maindia >> sout) << nort;
+  int north = -diag & ( diag >> 31);
+  int south =  diag & (-diag >> 31);
+  return (maindia >> south) << north;
 }
 
 // https://chessprogramming.wikispaces.com/Flipping+Mirroring+and+Rotating
@@ -156,26 +161,53 @@ static uint64_t rect_mask (const Vec2& center, const Vec2& size) {
     return res;
 }
 
-static uint64_t rayUntilBlocked (uint64_t own, uint64_t enemy, const Vec2& pos, Direction dir) {
-    uint64_t mask = 0;
-    Vec2 dirV = dir_vectors[dir];
-    bool hit = false;
-    Vec2 tmp = pos;
-    //tmp.x += dirV.x; tmp.y += dirV.y;
-    while (tmp.x >= 0 && tmp.x < 8 && tmp.y >= 0 && tmp.y < 8 && !hit) {
-        if (CHECK_BIT(own,tmp.idx())) { hit = true; continue; }
-        else if (CHECK_BIT(enemy,tmp.idx())) hit = true; // no continue so we mark the spot as available
-        mask = SET_BIT(mask,tmp.idx());
-        tmp.x += dirV.x; tmp.y += dirV.y;
+static uint64_t full_rank_mask (uint8_t start, uint8_t end){
+    uint8_t height = end - start;
+    uint64_t fullMask = 0xffffffffffffffff;
+
+    fullMask = fullMask >> ((8 - height) * 8);
+    fullMask = fullMask << (start * 8);
+    return fullMask;
+}
+
+static uint64_t full_file_mask (uint8_t start, uint8_t end){
+    return flipDiagA1H8(full_rank_mask(start, end));
+}
+
+static uint64_t ray_in_direction (const Vec2& pos, Direction dir){
+    switch (dir) {
+    case Direction::NORTH:
+        return file_mask(pos.x) & full_rank_mask(pos.y, 8);
+    case Direction::SOUTH:
+        return file_mask(pos.x) & full_rank_mask(0, pos.y);
+    case Direction::EAST:
+        return rank_mask(pos.y) & full_file_mask(pos.x, 8);
+    case Direction::WEST:
+        return rank_mask(pos.y) & full_file_mask(0, pos.x);
+    case Direction::NORTHEAST:
+        return diagonal_mask(pos.idx) & full_rank_mask(pos.y, 8);
+    case Direction::SOUTHWEST:
+        return diagonal_mask(pos.idx) & full_rank_mask(0, pos.y);
+    case Direction::NORTHWEST:
+        return antidiagonal_mask(pos.idx) & full_rank_mask(pos.y, 8);
+    case Direction::SOUTHEAST:
+        return antidiagonal_mask(pos.idx) & full_rank_mask(0, pos.y);
     }
-    return mask;
+}
+
+static uint64_t rayUntilBlocked (uint64_t own, uint64_t enemy, const Vec2& pos, Direction dir) {
+    uint64_t blockers = CLEAR_BIT((own | enemy), pos.idx);
+    uint64_t move_mask = ray_in_direction(pos, dir);
+    uint64_t hit = LSB_FIRST(move_mask & blockers);
+    uint64_t anti_mask = ray_in_direction({static_cast<int16_t>(hit)}, dir);
+    return move_mask & ~anti_mask;
 }
 
 
 static uint64_t knight_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
     uint64_t tl = 258;
     uint64_t bl = 513;
-    int16_t idx = pos.idx();
+    int16_t idx = pos.idx;
     uint64_t mask = (tl << (idx + 9)) | (bl << (idx + 6));
     if (idx - 15 >= 0) mask |= bl << (idx - 15);
     if (idx - 18 >= 0) mask |= tl << (idx - 18);
@@ -188,14 +220,14 @@ static uint64_t bishop_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
     return CLEAR_BIT(rayUntilBlocked(own,enemy, pos, NORTHEAST)
          | rayUntilBlocked(own,enemy, pos, NORTHWEST)
          | rayUntilBlocked(own,enemy, pos, SOUTHEAST)
-         | rayUntilBlocked(own,enemy, pos, SOUTHWEST), pos.idx());
+         | rayUntilBlocked(own,enemy, pos, SOUTHWEST), pos.idx);
 }
 
 static uint64_t rook_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
     return CLEAR_BIT(rayUntilBlocked(own,enemy, pos, NORTH)
          | rayUntilBlocked(own,enemy, pos, SOUTH)
          | rayUntilBlocked(own,enemy, pos, EAST)
-         | rayUntilBlocked(own,enemy, pos, WEST), pos.idx());
+         | rayUntilBlocked(own,enemy, pos, WEST), pos.idx);
 }
 
 static uint64_t queen_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
@@ -204,8 +236,8 @@ static uint64_t queen_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
 
 static uint64_t king_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
     uint64_t mask = rect_mask(pos,{3,3});
-    if (pos.idx() == 3) mask |= SET_BIT(0,1) | SET_BIT(0,6); // castle squares
-    return CLEAR_BIT((mask & enemy) | (mask & ~own), pos.idx());
+    if (pos.idx == 3) mask |= SET_BIT(0,1) | SET_BIT(0,6); // castle squares
+    return CLEAR_BIT((mask & enemy) | (mask & ~own), pos.idx);
 }
 
 static uint64_t pawn_attack_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
@@ -213,7 +245,7 @@ static uint64_t pawn_attack_mask (uint64_t own, uint64_t enemy, const Vec2& pos)
                   | (SET_BIT(0,ROW_MAJOR(pos.x+1,pos.y+1)) & enemy);
     if (pos.x == 7) mask &= three_guard << 5;
     else if (pos.x == 0) mask &= three_guard;
-    return CLEAR_BIT(mask,pos.idx());
+    return CLEAR_BIT(mask,pos.idx);
 
 }
 
@@ -224,12 +256,12 @@ static uint64_t pawn_mask (uint64_t own, uint64_t enemy, const Vec2& pos) {
                   | (SET_BIT(0,ROW_MAJOR(pos.x+1,pos.y+1)) & enemy);
     if (pos.x == 7) mask &= three_guard << 5;
     else if (pos.x == 0) mask &= three_guard;
-    return CLEAR_BIT(mask,pos.idx());
+    return CLEAR_BIT(mask,pos.idx);
 }
 
 static uint64_t castle_mask (uint64_t own, uint64_t enemy, uint8_t flags, const Vec2& pos) {
     uint64_t mask = 0;
-    if (pos.idx() != 3) return 0;
+    if (pos.idx != 3) return 0;
     // Treat own pieces as capture. This way we can check if king
     // has clear path to rook.
     if (CHECK_BIT(flags,CASTLE_KINGSIDE) && rayUntilBlocked(enemy,own,pos,Direction::EAST) == 15) mask |= 2;
@@ -344,7 +376,7 @@ MoveIterator morphy::generateMoveMask (MoveGenCache& genState, const Board& stat
     }
     case PieceType::NONE: mask = 0;
     }
-    return {type, static_cast<uint16_t>(pos.idx()), {mask}};
+    return {type, static_cast<uint16_t>(pos.idx), {mask}};
 }
 
 void morphy::generateAllMoves (MoveGenCache& genState, const Board& state) {
@@ -451,7 +483,7 @@ std::vector<Move> morphy::threatsToCells (const MoveGenCache& genState, const Bo
 
     for (const auto& p : positions){
         uint16_t idx = 0;
-        uint16_t posIdx = static_cast<uint16_t>(p.idx());
+        uint16_t posIdx = static_cast<uint16_t>(p.idx);
 
         for (const PieceType& t : all_piece_types) {
             if (t == PieceType::NONE) continue;
@@ -487,87 +519,6 @@ std::vector<Move> morphy::threatsToCell (const MoveGenCache& genState, const Boa
     return threatsToCells(genState,board,{pos});
 }
 
-
-
-template <class T>
-static void testMask (const char * name, T target, T real) {
-    bool passed = target == real;
-    std::cout << name << ": " ;
-    if (passed) std::cout << "PASSED!\n";
-    else std::cout << "FAILED got: " << real << " expected: " << target << "\n";
-}
-
-void morphy::testMasks () {
-    std::cout << "-------------------------\n";
-    std::cout << "START TESTS\n";
-    std::cout << "-------------------------\n";
-
-    testMask<uint64_t>("rank 0", 0xff, rank_mask(0));
-    testMask<uint64_t>("rank 7", 0xff00000000000000, rank_mask(7));
-    testMask<uint64_t>("file 0", 0x101010101010101, file_mask(0));
-    testMask<uint64_t>("file 7", 0x8080808080808080, file_mask(7));
-    testMask<uint64_t>("file 7", 0x8080808080808080, file_mask(7));
-    testMask<uint64_t>("rect mask 3,3 3,3", 0x1c1c1c0000, rect_mask({3,3},{3,3}));
-    testMask<uint64_t>("rect mask 3,3 1,1", 0x8000000, rect_mask({3,3},{1,1}));
-    testMask<uint64_t>("ray north", 0x808080808000000, rayUntilBlocked(0,0,{3,3},Direction::NORTH));
-    testMask<uint64_t>("ray south", 0x8080808, rayUntilBlocked(0,0,{3,3},Direction::SOUTH));
-    testMask<uint64_t>("ray east", 0xf000000, rayUntilBlocked(0,0,{3,3},Direction::EAST));
-    testMask<uint64_t>("ray west", 0xf8000000, rayUntilBlocked(0,0,{3,3},Direction::WEST));
-    testMask<uint64_t>("ray northeast", 0x1020408000000, rayUntilBlocked(0,0,{3,3},Direction::NORTHEAST));
-    testMask<uint64_t>("ray northwest", 0x8040201008000000, rayUntilBlocked(0,0,{3,3},Direction::NORTHWEST));
-    testMask<uint64_t>("ray southeast", 0x8040201, rayUntilBlocked(0,0,{3,3},Direction::SOUTHEAST));
-    testMask<uint64_t>("ray southwest", 0x8102040, rayUntilBlocked(0,0,{3,3},Direction::SOUTHWEST));
-    testMask<uint64_t>("bishop mask 3,3", 9241705379636978241, bishop_mask(0,0,{3,3}));
-    testMask<uint64_t>("rook mask 3,3", 578721386714368008, rook_mask(0,0,{3,3}));
-    testMask<uint64_t>("queen mask 3,3", 9820426766351346249, queen_mask(0,0,{3,3}));
-    testMask<uint64_t>("queen mask 3,0", 578721933553179895, queen_mask(0,0,{3,0}));
-    testMask<uint64_t>("king mask 0,0",770, king_mask(0,0,{0,0}));
-    testMask<uint64_t>("knight 3,3", 0x142200221400, knight_mask(0,0,{3,3}));
-    testMask<uint64_t>("knight 0,3", 0x20400040200, knight_mask(0,0,{0,3}));
-    testMask<uint64_t>("knight 7,3", 0x402000204000, knight_mask(0,0,{7,3}));
-    testMask<uint64_t>("pawn 0,1", 0x1030000, pawn_mask(0,0xffffffffffffffff,{0,1}));
-    testMask<uint64_t>("pawn 7,1", 0x80c00000, pawn_mask(0,0xffffffffffffffff,{7,1}));
-
-    Board standardBoard;
-    initializeBoard(standardBoard);
-
-    // Standard board with one black pawn on (7,6)
-    Board oneBlackPawn = standardBoard;
-    oneBlackPawn.pawns &= 0x8000000000ff00;
-
-    Board castleKingSide = standardBoard;
-    castleKingSide.knights = CLEAR_BIT(castleKingSide.knights,1);
-    castleKingSide.bishops = CLEAR_BIT(castleKingSide.bishops,2);
-    castleKingSide.current_bb &= ~static_cast<uint64_t>(6);
-
-    Board castleQueenSide = standardBoard;
-    castleQueenSide.queens  = CLEAR_BIT(castleQueenSide.queens,4);
-    castleQueenSide.bishops = CLEAR_BIT(castleQueenSide.bishops,5);
-    castleQueenSide.knights = CLEAR_BIT(castleQueenSide.knights,6);
-    castleQueenSide.current_bb &= ~static_cast<uint64_t>(112);
-
-    Board pawnBoard = standardBoard;
-    pawnBoard.pawns = 0x103fe00;
-    pawnBoard.current_bb = CLEAR_BIT(SET_BIT(pawnBoard.current_bb,16),8);
-
-    testMask<uint64_t>("threats 1", 4, threatsToCell({oneBlackPawn}, oneBlackPawn, {3,6}).size());
-    testMask<uint64_t>("threats 2", 1, threatsToCell({oneBlackPawn}, oneBlackPawn, {0,6}).size());
-    testMask<uint64_t>("threats 3", 2, threatsToCell({oneBlackPawn}, oneBlackPawn, {6,5}).size());
-    testMask<uint64_t>("threats 4", 1, threatsToCell({oneBlackPawn}, oneBlackPawn, {3,2}).size());
-
-    testMask<bool>("validate kingside castle", false, validateMove({standardBoard},standardBoard,{PieceType::KING, 3, 1}));        // Can't castle with pieces in the way
-    testMask<bool>("validate kingside castle", true, validateMove({castleKingSide},castleKingSide,{PieceType::KING, 3, 1}));       // Can castle
-    testMask<bool>("validate queenside castle", false, validateMove({standardBoard},standardBoard,{PieceType::KING, 3, 5}));       // Can't castle with piece in the way
-    testMask<bool>("validate queenside castle", true, validateMove({castleQueenSide},castleQueenSide,{PieceType::KING, 3, 5}));    // Can castle
-    testMask<bool>("validate queenside castle", false, validateMove({castleQueenSide},castleQueenSide,{PieceType::KING, 30, 30})); // Can't castle after having moved
-    testMask<bool>("validate pawn double", false, validateMove({pawnBoard}, pawnBoard, {PieceType::PAWN, 16, 32}));                // Can't double after it's moved
-    testMask<bool>("validate pawn double", false, validateMove({pawnBoard}, pawnBoard, {PieceType::PAWN, 9, 25}));                 // Can't double with piece in the way
-    testMask<bool>("validate pawn double", true, validateMove({pawnBoard}, pawnBoard, {PieceType::PAWN, 10, 26}));                 // Can double
-
-    std::cout << "-------------------------\n";
-    std::cout << "END TESTS\n";
-    std::cout << "-------------------------\n";
-}
 
 static void printBoard_internal (const Board& board, uint64_t mask, const char * tiles, char * output){
     for (const auto& t : all_piece_types){

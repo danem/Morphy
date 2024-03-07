@@ -2,23 +2,17 @@ cmake_minimum_required(VERSION 3.2)
 project(Morphy CXX)
 set(CMAKE_CXX_STANDARD 11)
 
-set(SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/source)
 set(INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-set(SOURCE_FILES
-    ${SOURCE_DIR}/board.cc
-    ${SOURCE_DIR}/engine.cc
-    ${SOURCE_DIR}/main.cc
-    ${SOURCE_DIR}/uci.cc
+
+add_library(morphy
+    ./src/board.cc
+    ./src/engine.cc
+    ./src/uci.cc
 )
+target_include_directories(morphy PUBLIC ./include)
 
-set(INCLUDE_FILES 
-    ${INCLUDE_DIR}/board.h
-    ${INCLUDE_DIR}/engine.h
-    ${INCLUDE_DIR}/uci.h
-)
-
-add_executable(morphy ${SOURCE_FILES} ${INCLUDE_FILES})
-
+add_executable(morphy_tests ./tests/board.cc)
+target_link_libraries(morphy_tests morphy)
 
 
